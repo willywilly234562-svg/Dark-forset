@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Shield, Sword, Coins, ShoppingBag, Tent, Ghost, Zap, Move, Skull, Heart, Wind, Hammer, LogOut, AlertTriangle, Key } from 'lucide-react';
+import { Activity, Shield, Sword, Coins, ShoppingBag, Tent, Ghost, Zap, Move, Skull, Heart, Wind, Hammer, LogOut, AlertTriangle, Key, UserPlus, Trash2 } from 'lucide-react';
 import { PlayerStats, Item, EquipmentSlots, LogEntry, PuzzleState, Enemy, PlayerClass } from './types';
 import { INITIAL_PLAYER_STATS, BASIC_ITEMS, MONSTER_NAMES, MONSTER_SPRITES, SHOP_ITEMS } from './constants';
 import ItemCard from './components/ItemCard';
@@ -13,6 +13,22 @@ const uuid = () => Date.now().toString(36) + Math.random().toString(36).substrin
 
 // --- CONSTANTS ---
 const GAME_SCALE = 1.45; // Zoom factor (Balanced between 1.0 and 1.75)
+const SAVE_KEY = 'dark-forest-saves';
+
+const createDefaultEquipment = (): EquipmentSlots => ({ weapon: null, armor: null, accessory: null });
+
+const createDefaultSkillCooldowns = () => ({
+  dash: 0,
+  special: 0,
+  block: 0,
+});
+
+const createDefaultPuzzleState = (): PuzzleState => ({
+  isActive: false,
+  riddle: null,
+  difficulty: 'EASY',
+  isLoading: false,
+});
 
 // Deterministic random for terrain features based on coordinates
 const pseudoRandom = (x: number, y: number) => {
@@ -40,6 +56,65 @@ interface CombatState {
     isAttacking: boolean; // Animation state for attacking
 }
 
+interface CharacterState {
+  player: PlayerStats;
+  inventory: Item[];
+  equipment: EquipmentSlots;
+  logs: LogEntry[];
+  activeTab: 'ADVENTURE' | 'INVENTORY' | 'SHOP' | 'PUZZLE';
+  skillCooldowns: { dash: number; special: number; block: number };
+  puzzle: { difficulty: PuzzleState['difficulty'] };
+}
+
+interface CharacterSave {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  state: CharacterState;
+}
+
+interface SaveStore {
+  version: number;
+  activeId: string | null;
+  characters: Record<string, CharacterSave>;
+}
+
+const createDefaultCombatState = (): CombatState => ({
+  isActive: false,
+  enemies: [],
+  lastAction: '',
+  playerAnimating: false,
+  playerPos: { x: 0, y: 0 },
+  playerFacing: 'RIGHT',
+  waveCount: 0,
+  visualEffects: [],
+  blockEndTime: 0,
+  deathAnimationStart: null,
+  killerName: null,
+  isAttacking: false,
+});
+
+const loadSaveStore = (): SaveStore => {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) {
+      return { version: 1, activeId: null, characters: {} };
+    }
+    const parsed = JSON.parse(raw) as Partial<SaveStore>;
+    if (!parsed || typeof parsed !== 'object') {
+      return { version: 1, activeId: null, characters: {} };
+    }
+    return {
+      version: parsed.version ?? 1,
+      activeId: parsed.activeId ?? null,
+      characters: parsed.characters ?? {},
+    };
+  } catch {
+    return { version: 1, activeId: null, characters: {} };
+  }
+};
+
 interface CombatResult {
     type: 'VICTORY' | 'DEFEAT';
     enemyName: string; // Name of the one that killed you, or "The Horde"
@@ -52,51 +127,39 @@ export default function App() {
   // --- State ---
   const [player, setPlayer] = useState<PlayerStats>(INITIAL_PLAYER_STATS);
   const [inventory, setInventory] = useState<Item[]>([]);
-  const [equipment, setEquipment] = useState<EquipmentSlots>({ weapon: null, armor: null, accessory: null });
+  const [equipment, setEquipment] = useState<EquipmentSlots>(createDefaultEquipment);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [activeTab, setActiveTab] = useState<'ADVENTURE' | 'INVENTORY' | 'SHOP' | 'PUZZLE'>('ADVENTURE');
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [showSwordAnimation, setShowSwordAnimation] = useState(false);
+
+  const [saveStore, setSaveStore] = useState<SaveStore>(() => loadSaveStore());
+  const [activeCharacterId, setActiveCharacterId] = useState<string | null>(() => loadSaveStore().activeId);
+  const [characterNameInput, setCharacterNameInput] = useState('');
+  const [isCreatingCharacter, setIsCreatingCharacter] = useState(false);
+  const [showCharacterSelection, setShowCharacterSelection] = useState(() => {
+    const store = loadSaveStore();
+    return !store.activeId || Object.keys(store.characters).length === 0;
+  });
   
   // API Key State
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
 
   // Combat State
-  const [combat, setCombat] = useState<CombatState>({
-    isActive: false,
-    enemies: [],
-    lastAction: '',
-    playerAnimating: false,
-    playerPos: { x: 0, y: 0 }, // World Coordinates (0,0 is start)
-    playerFacing: 'RIGHT',
-    waveCount: 0,
-    visualEffects: [],
-    blockEndTime: 0,
-    deathAnimationStart: null,
-    killerName: null,
-    isAttacking: false,
-  });
+  const [combat, setCombat] = useState<CombatState>(createDefaultCombatState);
 
   const [combatResult, setCombatResult] = useState<CombatResult | null>(null);
 
   // Skills State (Cooldowns in ms timestamp)
-  const [skillCooldowns, setSkillCooldowns] = useState({
-      dash: 0,
-      special: 0, // "special" is mapped to E key (Thunder for Soldier, Heal for Doctor)
-      block: 0,   // "block" is mapped to Q key
-  });
+  const [skillCooldowns, setSkillCooldowns] = useState(createDefaultSkillCooldowns);
 
   // Puzzle State
-  const [puzzle, setPuzzle] = useState<PuzzleState>({
-    isActive: false,
-    riddle: null,
-    difficulty: 'EASY',
-    isLoading: false,
-  });
+  const [puzzle, setPuzzle] = useState<PuzzleState>(createDefaultPuzzleState);
   const [puzzleAnswer, setPuzzleAnswer] = useState('');
 
   const logsContainerRef = useRef<HTMLDivElement>(null);
+  const characterNameInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasSizeRef = useRef({ width: 0, height: 0 });
   const terrainCacheRef = useRef<{ canvas: HTMLCanvasElement | null; ctx: CanvasRenderingContext2D | null; startCol: number; startRow: number; cols: number; rows: number; pxPerUnit: number; tilePixelSize: number; width: number; height: number; }>({
@@ -123,6 +186,8 @@ export default function App() {
   const keysPressed = useRef<Set<string>>(new Set());
   const animationFrameRef = useRef<number>(0);
   const lastCombatStateSyncRef = useRef(0);
+  const saveDebounceRef = useRef<number | null>(null);
+  const hasHydratedRef = useRef(false);
 
   // Sync Refs
   useEffect(() => { playerRef.current = player; }, [player]);
@@ -161,10 +226,78 @@ export default function App() {
     };
   }, [combat.isActive]);
 
+  useEffect(() => {
+    if (hasHydratedRef.current) return;
+    const store = loadSaveStore();
+    setSaveStore(store);
+    if (store.activeId) {
+      const activeSave = store.characters[store.activeId];
+      if (activeSave) {
+        hydrateFromSave(activeSave.state);
+        setActiveCharacterId(activeSave.id);
+        setShowCharacterSelection(activeSave.state.player.class === 'NONE');
+      }
+    }
+    hasHydratedRef.current = true;
+  }, []);
+
   // --- Helpers ---
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
     setLogs(prev => [...prev, { id: uuid(), message, type, timestamp: Date.now() }]);
   }, []);
+
+  const buildCharacterState = (): CharacterState => ({
+    player,
+    inventory,
+    equipment,
+    logs,
+    activeTab,
+    skillCooldowns,
+    puzzle: { difficulty: puzzle.difficulty },
+  });
+
+  const hydrateFromSave = (state: CharacterState) => {
+    setPlayer(state.player);
+    setInventory(state.inventory || []);
+    setEquipment(state.equipment || createDefaultEquipment());
+    setLogs(state.logs || []);
+    setActiveTab(state.activeTab || 'ADVENTURE');
+    setSkillCooldowns(state.skillCooldowns || createDefaultSkillCooldowns());
+    setPuzzle(() => ({ ...createDefaultPuzzleState(), difficulty: state.puzzle?.difficulty ?? 'EASY' }));
+    setCombat(createDefaultCombatState());
+    setCombatResult(null);
+  };
+
+  const persistSaveStore = (next: SaveStore) => {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(next));
+    setSaveStore(next);
+  };
+
+  const scheduleAutosave = () => {
+    if (!activeCharacterId) return;
+    if (saveDebounceRef.current) {
+      window.clearTimeout(saveDebounceRef.current);
+    }
+    saveDebounceRef.current = window.setTimeout(() => {
+      const store = loadSaveStore();
+      const current = store.characters[activeCharacterId];
+      if (!current) return;
+      const updated: CharacterSave = {
+        ...current,
+        updatedAt: Date.now(),
+        state: buildCharacterState(),
+      };
+      const next: SaveStore = {
+        ...store,
+        activeId: activeCharacterId,
+        characters: {
+          ...store.characters,
+          [activeCharacterId]: updated,
+        },
+      };
+      persistSaveStore(next);
+    }, 400);
+  };
 
   const scrollToBottom = () => {
     if (logsContainerRef.current) {
@@ -179,12 +312,118 @@ export default function App() {
     scrollToBottom();
   }, [logs]);
 
+  useEffect(() => {
+    if (!isCreatingCharacter) return;
+    window.setTimeout(() => {
+      characterNameInputRef.current?.focus();
+    }, 0);
+  }, [isCreatingCharacter]);
+
   // --- API Key Handler ---
   const handleSaveApiKey = (key: string) => {
       setApiKey(key);
       localStorage.setItem('gemini_api_key', key);
       setShowApiKeyModal(false);
       addLog("API Key saved securely.", 'info');
+  };
+
+  const startNewCharacterFlow = () => {
+    setCharacterNameInput('');
+    setIsCreatingCharacter(true);
+    setShowCharacterSelection(true);
+  };
+
+  const createNewCharacter = (name: string) => {
+    const newId = uuid();
+    const now = Date.now();
+    const freshState: CharacterState = {
+      player: { ...INITIAL_PLAYER_STATS, class: 'NONE' },
+      inventory: [],
+      equipment: createDefaultEquipment(),
+      logs: [],
+      activeTab: 'ADVENTURE',
+      skillCooldowns: createDefaultSkillCooldowns(),
+      puzzle: { difficulty: 'EASY' },
+    };
+    const newSave: CharacterSave = {
+      id: newId,
+      name: name.trim(),
+      createdAt: now,
+      updatedAt: now,
+      state: freshState,
+    };
+    const store = loadSaveStore();
+    const next: SaveStore = {
+      ...store,
+      activeId: newId,
+      characters: {
+        ...store.characters,
+        [newId]: newSave,
+      },
+    };
+    persistSaveStore(next);
+    setActiveCharacterId(newId);
+    setIsCreatingCharacter(false);
+    hydrateFromSave(freshState);
+    setShowCharacterSelection(true);
+  };
+
+  const handleSelectCharacter = (characterId: string) => {
+    const store = loadSaveStore();
+    const save = store.characters[characterId];
+    if (!save) return;
+    const next: SaveStore = { ...store, activeId: characterId };
+    persistSaveStore(next);
+    setActiveCharacterId(characterId);
+    hydrateFromSave(save.state);
+    if (save.state.player.class === 'NONE') {
+      setIsCreatingCharacter(false);
+      setShowCharacterSelection(true);
+    } else {
+      setShowCharacterSelection(false);
+    }
+  };
+
+  const handleDeleteCharacter = (characterId: string) => {
+    const store = loadSaveStore();
+    if (!store.characters[characterId]) return;
+    const nextCharacters = { ...store.characters };
+    delete nextCharacters[characterId];
+    const remainingIds = Object.keys(nextCharacters);
+    const nextActiveId = store.activeId === characterId ? (remainingIds[0] ?? null) : store.activeId;
+    const next: SaveStore = {
+      ...store,
+      activeId: nextActiveId,
+      characters: nextCharacters,
+    };
+    persistSaveStore(next);
+    if (!nextActiveId) {
+      setActiveCharacterId(null);
+      setShowCharacterSelection(true);
+      setIsCreatingCharacter(false);
+      hydrateFromSave({
+        player: { ...INITIAL_PLAYER_STATS, class: 'NONE' },
+        inventory: [],
+        equipment: createDefaultEquipment(),
+        logs: [],
+        activeTab: 'ADVENTURE',
+        skillCooldowns: createDefaultSkillCooldowns(),
+        puzzle: { difficulty: 'EASY' },
+      });
+    } else if (nextActiveId !== activeCharacterId) {
+      const nextSave = next.characters[nextActiveId];
+      if (nextSave) {
+        setActiveCharacterId(nextActiveId);
+        hydrateFromSave(nextSave.state);
+      }
+    }
+  };
+
+  const openCharacterSelection = () => {
+    const store = loadSaveStore();
+    setSaveStore(store);
+    setShowCharacterSelection(true);
+    setIsCreatingCharacter(false);
   };
 
   // --- Derived Stats (Helper) ---
@@ -240,13 +479,38 @@ export default function App() {
         ? { hp: 100, maxHp: 100, attack: 10, defense: 3 } // Soldier: Stronger Start
         : { hp: 80, maxHp: 80, attack: 4, defense: 2 };   // Doctor: Weaker Start, but heals
 
-      setPlayer({
+      const nextPlayer = {
           ...INITIAL_PLAYER_STATS,
           ...baseStats,
           class: cls,
-      });
+      };
 
+      setPlayer(nextPlayer);
       addLog(`You have chosen the path of the ${cls}.`, 'info');
+
+      if (activeCharacterId) {
+        const store = loadSaveStore();
+        const current = store.characters[activeCharacterId];
+        if (current) {
+          const updated: CharacterSave = {
+            ...current,
+            updatedAt: Date.now(),
+            state: {
+              ...current.state,
+              player: nextPlayer,
+            },
+          };
+          const next: SaveStore = {
+            ...store,
+            activeId: activeCharacterId,
+            characters: {
+              ...store.characters,
+              [activeCharacterId]: updated,
+            },
+          };
+          persistSaveStore(next);
+        }
+      }
   };
 
   const retireCharacter = () => {
@@ -254,26 +518,13 @@ export default function App() {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
       keysPressed.current.clear();
       
-      setCombat({
-          isActive: false,
-          enemies: [],
-          lastAction: '',
-          playerAnimating: false,
-          playerPos: { x: 0, y: 0 },
-          playerFacing: 'RIGHT',
-          waveCount: 0,
-          visualEffects: [],
-          blockEndTime: 0,
-          deathAnimationStart: null,
-          killerName: null,
-          isAttacking: false,
-      });
+      setCombat(createDefaultCombatState());
       setCombatResult(null);
 
       // Reset Player and Inventory
       setPlayer({ ...INITIAL_PLAYER_STATS }); // Spread to ensure new object reference
       setInventory([]);
-      setEquipment({ weapon: null, armor: null, accessory: null });
+      setEquipment(createDefaultEquipment());
       setLogs([]);
       setActiveTab('ADVENTURE');
       
@@ -633,18 +884,9 @@ export default function App() {
 
     setCombatResult(null); 
     setCombat({
+        ...createDefaultCombatState(),
         isActive: true,
-        enemies: [],
         lastAction: 'Entering the wild...',
-        playerAnimating: false,
-        playerPos: { x: 0, y: 0 }, // Reset to origin
-        playerFacing: 'RIGHT',
-        waveCount: 0,
-        visualEffects: [],
-        blockEndTime: 0,
-        deathAnimationStart: null,
-        killerName: null,
-        isAttacking: false,
     });
     
     // Initial Spawn
@@ -905,6 +1147,11 @@ export default function App() {
       return () => cancelAnimationFrame(animationFrameRef.current);
   }, [combat.isActive]);
 
+  useEffect(() => {
+    if (!activeCharacterId || showCharacterSelection) return;
+    scheduleAutosave();
+  }, [player, inventory, equipment, logs, activeTab, skillCooldowns, puzzle.difficulty, activeCharacterId, showCharacterSelection]);
+
 
   const attackEnemy = () => {
     if (combat.deathAnimationStart) return; // Cannot attack while dying
@@ -1052,7 +1299,7 @@ export default function App() {
       // Clear keys
       keysPressed.current.clear();
 
-      setCombat({ isActive: false, enemies: [], lastAction: '', playerAnimating: false, playerPos: {x:0, y:0}, playerFacing: 'RIGHT', waveCount: 0, visualEffects: [], blockEndTime: 0, deathAnimationStart: null, killerName: null, isAttacking: false });
+      setCombat(createDefaultCombatState());
       setCombatResult(null);
   };
 
@@ -1172,75 +1419,175 @@ export default function App() {
 
   // --- Render ---
 
-  // CHARACTER SELECTION SCREEN
-  if (player.class === 'NONE') {
+  // CHARACTER SELECTION / CREATION SCREEN
+  if (showCharacterSelection) {
+      const characterEntries = Object.values(saveStore.characters).sort((a, b) => b.updatedAt - a.updatedAt);
+      const pendingClassId = player.class === 'NONE' ? activeCharacterId : null;
+      const isNaming = isCreatingCharacter;
       return (
-          <div className="h-[100dvh] bg-slate-900 text-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
+          <div className="h-[100dvh] bg-slate-900 text-slate-100 relative overflow-hidden">
                <div className="absolute inset-0 bg-[url('https://picsum.photos/1920/1080?grayscale&blur=2')] bg-cover bg-center opacity-30"></div>
-               <div className="relative z-10 max-w-4xl w-full">
-                   <h1 className="text-5xl cinzel font-bold text-center text-amber-500 mb-12 drop-shadow-lg">Choose Your Path</h1>
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                       
-                       {/* SOLDIER CARD */}
-                       <div 
-                        onClick={() => selectCharacter('SOLDIER')}
-                        className="bg-slate-800/80 backdrop-blur-md p-8 rounded-2xl border-2 border-slate-600 hover:border-amber-500 hover:bg-slate-800 transition-all cursor-pointer group transform hover:-translate-y-2 hover:shadow-[0_0_30px_rgba(245,158,11,0.3)] flex flex-col items-center text-center"
-                       >
-                           <div className="w-24 h-24 bg-slate-900 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform border-2 border-slate-700 group-hover:border-amber-500 overflow-hidden">
-                                <PlayerAvatar playerClass="SOLDIER" className="w-full h-full object-contain pixel-render" />
-                           </div>
-                           <h2 className="text-3xl cinzel font-bold text-white mb-2">The Soldier</h2>
-                           <p className="text-slate-400 mb-6 flex-1">
-                               A master of warfare forged in the fires of battle. Deals devastating damage but relies on items to heal.
-                           </p>
-                           <div className="w-full bg-slate-900/50 rounded-lg p-4 text-sm mb-6 space-y-2">
-                               <div className="flex justify-between text-slate-300">
-                                   <span>Attack</span>
-                                   <div className="flex gap-1"><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
-                               </div>
-                               <div className="flex justify-between text-slate-300">
-                                   <span>Defense</span>
-                                   <div className="flex gap-1"><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
-                               </div>
-                               <div className="flex justify-between text-slate-300 pt-2 border-t border-slate-700 mt-2">
-                                   <span className="font-bold text-yellow-500">Skill (E)</span>
-                                   <span>Thunder Clap</span>
-                               </div>
-                           </div>
-                           <button className="px-8 py-3 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-full w-full">Select Soldier</button>
-                       </div>
+               <div className="relative z-10 w-full h-[100dvh] flex flex-col p-6 gap-6">
+                    <h1 className="text-4xl md:text-5xl cinzel font-bold text-center text-amber-500 drop-shadow-lg">The Dark Forest Archives</h1>
 
-                       {/* DOCTOR CARD */}
-                       <div 
-                        onClick={() => selectCharacter('DOCTOR')}
-                        className="bg-slate-800/80 backdrop-blur-md p-8 rounded-2xl border-2 border-slate-600 hover:border-emerald-500 hover:bg-slate-800 transition-all cursor-pointer group transform hover:-translate-y-2 hover:shadow-[0_0_30px_rgba(16,185,129,0.3)] flex flex-col items-center text-center"
-                       >
-                           <div className="w-24 h-24 bg-slate-900 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform border-2 border-slate-700 group-hover:border-emerald-500 overflow-hidden">
-                                <PlayerAvatar playerClass="DOCTOR" className="w-full h-full object-contain pixel-render" />
-                           </div>
-                           <h2 className="text-3xl cinzel font-bold text-white mb-2">The Doctor</h2>
-                           <p className="text-slate-400 mb-6 flex-1">
-                               A field medic who understands the frailty of life. Deals lower damage but can self-heal in the heat of combat.
-                           </p>
-                           <div className="w-full bg-slate-900/50 rounded-lg p-4 text-sm mb-6 space-y-2">
-                               <div className="flex justify-between text-slate-300">
-                                   <span>Attack</span>
-                                   <div className="flex gap-1"><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
-                               </div>
-                               <div className="flex justify-between text-slate-300">
-                                   <span>Defense</span>
-                                   <div className="flex gap-1"><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
-                               </div>
-                               <div className="flex justify-between text-slate-300 pt-2 border-t border-slate-700 mt-2">
-                                   <span className="font-bold text-emerald-500">Skill (E)</span>
-                                   <span>Field Medic</span>
-                               </div>
-                           </div>
-                           <button className="px-8 py-3 bg-emerald-700 hover:bg-emerald-600 text-white font-bold rounded-full w-full">Select Doctor</button>
-                       </div>
+                    <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1.1fr_1.4fr] gap-6">
+                        <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-6 backdrop-blur-md shadow-2xl flex flex-col min-h-0">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
+                                <div>
+                                    <h2 className="text-2xl font-bold text-slate-100">Saved Characters</h2>
+                                    <p className="text-slate-400 text-sm">Select a hero or create a new one.</p>
+                                </div>
+                                <button
+                                    onClick={startNewCharacterFlow}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-700 hover:bg-amber-600 text-white font-bold"
+                                >
+                                    <UserPlus size={18} /> New Character
+                                </button>
+                            </div>
 
-                   </div>
-               </div>
+                            <div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-3">
+                                {characterEntries.length === 0 ? (
+                                    <div className="text-center text-slate-400 py-8">No heroes yet. Create your first character.</div>
+                                ) : (
+                                    characterEntries.map((character) => (
+                                        <div key={character.id} className={`bg-slate-800/80 border rounded-xl p-4 flex items-center justify-between ${pendingClassId === character.id ? 'border-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.35)]' : 'border-slate-700'}`}>
+                                            <div>
+                                                <div className="text-lg font-bold text-white">{character.name}</div>
+                                                <div className="text-xs text-slate-400">Class {character.state.player.class === 'NONE' ? 'Unassigned' : character.state.player.class} • Lvl {character.state.player.level} • {character.state.player.gold} G</div>
+                                                <div className="text-[11px] text-slate-500">Last played {new Date(character.updatedAt).toLocaleString()}</div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => handleSelectCharacter(character.id)}
+                                                    className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold"
+                                                >
+                                                    Continue
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteCharacter(character.id)}
+                                                    className="p-2 rounded-lg bg-red-900/70 hover:bg-red-700 text-red-100"
+                                                    aria-label={`Delete ${character.name}`}
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+
+                            {isNaming && (
+                                <div className="mt-4 bg-slate-900/80 border border-slate-700 rounded-xl p-4 shadow-xl">
+                                    <h3 className="text-lg font-bold text-amber-400 mb-3">Name Your Hero</h3>
+                                    <div className="flex flex-col gap-3">
+                                        <input
+                                            ref={characterNameInputRef}
+                                            value={characterNameInput}
+                                            onChange={(e) => setCharacterNameInput(e.target.value)}
+                                            placeholder="Enter character name"
+                                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-amber-500"
+                                        />
+                                        <div className="flex flex-col sm:flex-row gap-3">
+                                            <button
+                                                onClick={() => characterNameInput.trim() && createNewCharacter(characterNameInput)}
+                                                className="flex-1 px-6 py-3 bg-amber-700 hover:bg-amber-600 text-white font-bold rounded-lg"
+                                            >
+                                                Create
+                                            </button>
+                                            <button
+                                                onClick={() => setIsCreatingCharacter(false)}
+                                                className="flex-1 px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-lg"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </section>
+
+                        <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-6 backdrop-blur-md shadow-2xl min-h-0 overflow-y-auto">
+                            {!isNaming && player.class === 'NONE' ? (
+                                <div className={`max-w-3xl mx-auto border-2 rounded-2xl p-4 md:p-6 ${pendingClassId ? 'border-amber-500 shadow-[0_0_30px_rgba(245,158,11,0.35)]' : 'border-transparent'}`}>
+                                    <h2 className="text-3xl md:text-4xl cinzel font-bold text-center text-amber-500 mb-6 drop-shadow-lg">Choose Your Path</h2>
+                                    {pendingClassId && (
+                                        <div className="text-center text-sm text-amber-200 mb-6">
+                                            Assigning class to <span className="font-bold">{saveStore.characters[pendingClassId]?.name ?? 'new hero'}</span>
+                                        </div>
+                                    )}
+                                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                                        
+                                        {/* SOLDIER CARD */}
+                                        <div 
+                                         onClick={() => selectCharacter('SOLDIER')}
+                                         className="bg-slate-800/80 backdrop-blur-md p-6 rounded-2xl border-2 border-slate-600 hover:border-amber-500 hover:bg-slate-800 transition-all cursor-pointer group transform hover:-translate-y-2 hover:shadow-[0_0_30px_rgba(245,158,11,0.3)] flex flex-col items-center text-center"
+                                        >
+                                            <div className="w-20 h-20 bg-slate-900 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform border-2 border-slate-700 group-hover:border-amber-500 overflow-hidden">
+                                                 <PlayerAvatar playerClass="SOLDIER" className="w-full h-full object-contain pixel-render" />
+                                            </div>
+                                            <h2 className="text-2xl cinzel font-bold text-white mb-2">The Soldier</h2>
+                                            <p className="text-slate-400 mb-4 flex-1">
+                                                A master of warfare forged in the fires of battle. Deals devastating damage but relies on items to heal.
+                                            </p>
+                                            <div className="w-full bg-slate-900/50 rounded-lg p-4 text-sm mb-4 space-y-2">
+                                                <div className="flex justify-between text-slate-300">
+                                                    <span>Attack</span>
+                                                    <div className="flex gap-1"><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
+                                                </div>
+                                                <div className="flex justify-between text-slate-300">
+                                                    <span>Defense</span>
+                                                    <div className="flex gap-1"><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
+                                                </div>
+                                                <div className="flex justify-between text-slate-300 pt-2 border-t border-slate-700 mt-2">
+                                                    <span className="font-bold text-yellow-500">Skill (E)</span>
+                                                    <span>Thunder Clap</span>
+                                                </div>
+                                            </div>
+                                            <button className="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-full w-full">Select Soldier</button>
+                                        </div>
+
+                                        {/* DOCTOR CARD */}
+                                        <div 
+                                         onClick={() => selectCharacter('DOCTOR')}
+                                         className="bg-slate-800/80 backdrop-blur-md p-6 rounded-2xl border-2 border-slate-600 hover:border-emerald-500 hover:bg-slate-800 transition-all cursor-pointer group transform hover:-translate-y-2 hover:shadow-[0_0_30px_rgba(16,185,129,0.3)] flex flex-col items-center text-center"
+                                        >
+                                            <div className="w-20 h-20 bg-slate-900 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform border-2 border-slate-700 group-hover:border-emerald-500 overflow-hidden">
+                                                 <PlayerAvatar playerClass="DOCTOR" className="w-full h-full object-contain pixel-render" />
+                                            </div>
+                                            <h2 className="text-2xl cinzel font-bold text-white mb-2">The Doctor</h2>
+                                            <p className="text-slate-400 mb-4 flex-1">
+                                                A field medic who understands the frailty of life. Deals lower damage but can self-heal in the heat of combat.
+                                            </p>
+                                            <div className="w-full bg-slate-900/50 rounded-lg p-4 text-sm mb-4 space-y-2">
+                                                <div className="flex justify-between text-slate-300">
+                                                    <span>Attack</span>
+                                                    <div className="flex gap-1"><span className="w-3 h-3 bg-red-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
+                                                </div>
+                                                <div className="flex justify-between text-slate-300">
+                                                    <span>Defense</span>
+                                                    <div className="flex gap-1"><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-blue-500 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span><span className="w-3 h-3 bg-slate-700 rounded-full"></span></div>
+                                                </div>
+                                                <div className="flex justify-between text-slate-300 pt-2 border-t border-slate-700 mt-2">
+                                                    <span className="font-bold text-emerald-500">Skill (E)</span>
+                                                    <span>Field Medic</span>
+                                                </div>
+                                            </div>
+                                            <button className="px-6 py-3 bg-emerald-700 hover:bg-emerald-600 text-white font-bold rounded-full w-full">Select Doctor</button>
+                                        </div>
+
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="h-full flex items-center justify-center text-slate-400 text-center">
+                                    <div>
+                                        <h2 className="text-2xl font-bold text-slate-200 mb-2">Class Selection</h2>
+                                        <p>Choose a saved hero on the left or create a new character to pick a class.</p>
+                                    </div>
+                                </div>
+                            )}
+                        </section>
+                    </div>
+                </div>
           </div>
       );
   }
@@ -1269,10 +1616,18 @@ export default function App() {
       {/* Sidebar: Stats */}
       <aside className="w-full md:w-72 bg-slate-950 border-r border-slate-800 flex-shrink-0 flex flex-col min-h-0 overflow-hidden p-2 z-30 shadow-xl">
         <h1 className="text-xl font-bold text-amber-500 mb-1 cinzel text-center">Riddle & Steel</h1>
+        <div className="flex items-center justify-center gap-2 mb-2">
+            <button
+                onClick={openCharacterSelection}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] uppercase tracking-widest text-slate-300 font-bold border border-slate-700"
+            >
+                Manage Saves
+            </button>
+        </div>
         <div className="flex justify-center mb-2">
              <div className="w-20 h-20 rounded-md overflow-hidden border-2 border-amber-500 shadow-lg bg-slate-800 relative">
-                 <PlayerAvatar 
-                    playerClass={player.class}
+                  <PlayerAvatar 
+                     playerClass={player.class}
                     className="w-full h-full object-contain pixel-render animate-breathe" 
                 />
             </div>
