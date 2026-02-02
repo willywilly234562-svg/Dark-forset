@@ -22,34 +22,34 @@ const ItemCard: React.FC<ItemCardProps> = ({ item, onEquip, onSell, isEquipped }
   const isMythic = item.rarity === ItemRarity.MYTHIC;
 
   return (
-    <div className={`relative p-3 rounded-lg border-2 flex flex-col gap-2 transition-transform hover:scale-[1.02] ${rarityColors[item.rarity]}`}>
+    <div className={`relative p-2 rounded-md border-2 flex flex-col gap-1.5 transition-transform hover:scale-[1.02] ${rarityColors[item.rarity]}`}>
       <div className="flex justify-between items-start">
-        <div className="flex items-center gap-2">
-          {isMythic ? <Flame size={18} className="text-red-500 animate-bounce" /> : <Icon size={18} />}
-          <h4 className={`font-bold text-sm cinzel ${isMythic ? 'text-red-400 drop-shadow-[0_0_5px_rgba(255,0,0,0.8)]' : ''}`}>
+        <div className="flex items-center gap-1.5">
+          {isMythic ? <Flame size={16} className="text-red-500 animate-bounce" /> : <Icon size={16} />}
+          <h4 className={`font-bold text-[13px] cinzel ${isMythic ? 'text-red-400 drop-shadow-[0_0_5px_rgba(255,0,0,0.8)]' : ''}`}>
             {item.name}
           </h4>
         </div>
-        {isEquipped && <span className="text-[10px] uppercase font-bold bg-green-900 text-green-300 px-1 rounded">Equipped</span>}
+        {isEquipped && <span className="text-[9px] uppercase font-bold bg-green-900 text-green-300 px-1 rounded">Equipped</span>}
       </div>
       
-      <p className="text-xs italic opacity-80 min-h-[2.5em]">{item.description}</p>
+      <p className="text-[11px] italic opacity-80 leading-snug min-h-[2em]">{item.description}</p>
       
-      <div className="grid grid-cols-2 gap-1 text-xs">
+      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px]">
         {item.stats.attack && <span className="text-red-300">ATK +{item.stats.attack}</span>}
         {item.stats.defense && <span className="text-blue-300">DEF +{item.stats.defense}</span>}
         {item.stats.hpBonus && <span className="text-green-300">HP +{item.stats.hpBonus}</span>}
       </div>
 
-      <div className="mt-auto flex justify-between items-center pt-2 border-t border-white/10">
-        <span className="flex items-center gap-1 text-xs text-yellow-500">
-            <Coins size={12} /> {item.value}
+      <div className="mt-auto flex justify-between items-center pt-1.5 border-t border-white/10">
+        <span className="flex items-center gap-1 text-[11px] text-yellow-500">
+            <Coins size={11} /> {item.value}
         </span>
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
             {onEquip && !isEquipped && (
                 <button 
                     onClick={() => onEquip(item)}
-                    className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-bold transition-colors"
+                    className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 rounded text-[11px] font-bold transition-colors"
                 >
                     Equip
                 </button>
@@ -57,7 +57,7 @@ const ItemCard: React.FC<ItemCardProps> = ({ item, onEquip, onSell, isEquipped }
             {onSell && (
                 <button 
                     onClick={() => onSell(item)}
-                    className="px-2 py-1 bg-red-900/50 hover:bg-red-900/80 rounded text-xs font-bold text-red-200 transition-colors"
+                    className="px-2 py-0.5 bg-red-900/50 hover:bg-red-900/80 rounded text-[11px] font-bold text-red-200 transition-colors"
                 >
                     Sell
                 </button>

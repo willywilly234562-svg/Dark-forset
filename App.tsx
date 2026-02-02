@@ -98,6 +98,20 @@ export default function App() {
 
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasSizeRef = useRef({ width: 0, height: 0 });
+  const terrainCacheRef = useRef<{ canvas: HTMLCanvasElement | null; ctx: CanvasRenderingContext2D | null; startCol: number; startRow: number; cols: number; rows: number; pxPerUnit: number; tilePixelSize: number; width: number; height: number; }>({
+    canvas: null,
+    ctx: null,
+    startCol: 0,
+    startRow: 0,
+    cols: 0,
+    rows: 0,
+    pxPerUnit: 0,
+    tilePixelSize: 0,
+    width: 0,
+    height: 0,
+  });
+  const terrainNeedsRedrawRef = useRef(true);
   
   // Refs for Real-time Combat Logic
   const playerRef = useRef(player);
@@ -108,6 +122,7 @@ export default function App() {
   const lastPlayerAttackTime = useRef(0);
   const keysPressed = useRef<Set<string>>(new Set());
   const animationFrameRef = useRef<number>(0);
+  const lastCombatStateSyncRef = useRef(0);
 
   // Sync Refs
   useEffect(() => { playerRef.current = player; }, [player]);
@@ -115,6 +130,36 @@ export default function App() {
   useEffect(() => { equipmentRef.current = equipment; }, [equipment]);
   useEffect(() => { combatResultRef.current = combatResult; }, [combatResult]);
   useEffect(() => { skillCooldownsRef.current = skillCooldowns; }, [skillCooldowns]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const applyCanvasSize = (width: number, height: number) => {
+      if (width <= 0 || height <= 0) return;
+      canvasSizeRef.current = { width, height };
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        terrainNeedsRedrawRef.current = true;
+      }
+    };
+
+    const rect = canvas.getBoundingClientRect();
+    applyCanvasSize(Math.floor(rect.width), Math.floor(rect.height));
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        applyCanvasSize(Math.floor(entry.contentRect.width), Math.floor(entry.contentRect.height));
+      }
+    });
+
+    observer.observe(canvas);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [combat.isActive]);
 
   // --- Helpers ---
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
@@ -486,34 +531,17 @@ export default function App() {
     return '#4a8c52'; // Forest (Medium Green)
   };
 
-  const drawTerrain = (ctx: CanvasRenderingContext2D, width: number, height: number, playerX: number, playerY: number) => {
-      const TILE_UNIT_SIZE = 10;
-      // ZOOM LOGIC: Increase pixels per unit
-      const pxPerUnit = width / (100 / GAME_SCALE); 
-      const tilePixelSize = TILE_UNIT_SIZE * pxPerUnit;
-      
-      const cols = Math.ceil(width / tilePixelSize) + 2;
-      const rows = Math.ceil(height / tilePixelSize) + 2;
-
-      const cx = playerX;
-      const cy = playerY;
-
-      const startCol = Math.floor(cx / TILE_UNIT_SIZE) - Math.floor(cols / 2);
-      const startRow = Math.floor(cy / TILE_UNIT_SIZE) - Math.floor(rows / 2);
-
+  const drawTerrain = (ctx: CanvasRenderingContext2D, cols: number, rows: number, startCol: number, startRow: number, tilePixelSize: number) => {
       for (let y = 0; y < rows; y++) {
           for (let x = 0; x < cols; x++) {
               const tileX = startCol + x;
               const tileY = startRow + y;
-              
+
               const biome = getBiomeAt(tileX, tileY);
               const rand = pseudoRandom(tileX, tileY);
-              
-              const worldPosTileX = tileX * TILE_UNIT_SIZE;
-              const worldPosTileY = tileY * TILE_UNIT_SIZE;
-              
-              const screenX = (width / 2) + (worldPosTileX - cx) * pxPerUnit;
-              const screenY = (height / 2) + (worldPosTileY - cy) * pxPerUnit;
+
+              const screenX = x * tilePixelSize;
+              const screenY = y * tilePixelSize;
               const drawSize = Math.ceil(tilePixelSize) + 2;
 
               // Draw Base Tile
@@ -680,17 +708,72 @@ export default function App() {
       let lastActionUpdate = state.lastAction;
       let playerTookDamage = false;
 
-      // 2. Terrain Rendering
+      // 2. Terrain Rendering (Cached)
       if (canvasRef.current) {
           const cvs = canvasRef.current;
-          // Simple resize check
-          if (cvs.width !== cvs.offsetWidth || cvs.height !== cvs.offsetHeight) {
-              cvs.width = cvs.offsetWidth;
-              cvs.height = cvs.offsetHeight;
-          }
-          const ctx = cvs.getContext('2d');
-          if (ctx) {
-              drawTerrain(ctx, cvs.width, cvs.height, newPlayerPos.x, newPlayerPos.y);
+          const { width, height } = canvasSizeRef.current;
+          if (width > 0 && height > 0) {
+              const ctx = cvs.getContext('2d');
+              if (ctx) {
+                  const TILE_UNIT_SIZE = 10;
+                  const pxPerUnit = width / (100 / GAME_SCALE);
+                  const tilePixelSize = TILE_UNIT_SIZE * pxPerUnit;
+                  const cols = Math.ceil(width / tilePixelSize) + 2;
+                  const rows = Math.ceil(height / tilePixelSize) + 2;
+
+                  const startCol = Math.floor(newPlayerPos.x / TILE_UNIT_SIZE) - Math.floor(cols / 2);
+                  const startRow = Math.floor(newPlayerPos.y / TILE_UNIT_SIZE) - Math.floor(rows / 2);
+
+                  const cache = terrainCacheRef.current;
+                  if (!cache.canvas) {
+                      cache.canvas = document.createElement('canvas');
+                      cache.ctx = cache.canvas.getContext('2d');
+                  }
+
+                  if (cache.canvas && cache.ctx) {
+                      const cacheWidth = Math.ceil(cols * tilePixelSize);
+                      const cacheHeight = Math.ceil(rows * tilePixelSize);
+                      const needsResize = cache.canvas.width !== cacheWidth || cache.canvas.height !== cacheHeight;
+
+                      if (needsResize) {
+                          cache.canvas.width = cacheWidth;
+                          cache.canvas.height = cacheHeight;
+                      }
+
+                      const needsRedraw =
+                          terrainNeedsRedrawRef.current ||
+                          needsResize ||
+                          cache.startCol !== startCol ||
+                          cache.startRow !== startRow ||
+                          cache.cols !== cols ||
+                          cache.rows !== rows ||
+                          cache.tilePixelSize !== tilePixelSize ||
+                          cache.width !== width ||
+                          cache.height !== height;
+
+                      if (needsRedraw) {
+                          cache.ctx.clearRect(0, 0, cache.canvas.width, cache.canvas.height);
+                          drawTerrain(cache.ctx, cols, rows, startCol, startRow, tilePixelSize);
+                          terrainNeedsRedrawRef.current = false;
+                          cache.startCol = startCol;
+                          cache.startRow = startRow;
+                          cache.cols = cols;
+                          cache.rows = rows;
+                          cache.pxPerUnit = pxPerUnit;
+                          cache.tilePixelSize = tilePixelSize;
+                          cache.width = width;
+                          cache.height = height;
+                      }
+
+                      const worldStartX = startCol * TILE_UNIT_SIZE;
+                      const worldStartY = startRow * TILE_UNIT_SIZE;
+                      const offsetX = (width / 2) + (worldStartX - newPlayerPos.x) * pxPerUnit;
+                      const offsetY = (height / 2) + (worldStartY - newPlayerPos.y) * pxPerUnit;
+
+                      ctx.clearRect(0, 0, width, height);
+                      ctx.drawImage(cache.canvas, Math.floor(offsetX), Math.floor(offsetY));
+                  }
+              }
           }
       }
 
@@ -773,32 +856,41 @@ export default function App() {
       // Cleanup Visual Effects
       const activeEffects = state.visualEffects.filter(e => now - e.timestamp < 500);
 
-      // Update State (if not dying inside the loop already)
-      setCombat(prev => {
-          // If we just triggered death inside the map loop, don't overwrite it with movement updates
-          if (prev.deathAnimationStart) return prev;
+      const nextCombatState = {
+          ...state,
+          playerPos: newPlayerPos,
+          playerFacing: newPlayerFacing,
+          playerAnimating: isMoving,
+          enemies: newEnemies,
+          lastAction: lastActionUpdate,
+          visualEffects: activeEffects
+      };
 
-          if (prev.enemies.length !== state.enemies.length) {
-               return {
+      combatRef.current = nextCombatState;
+
+      const shouldSyncCombatState =
+          (now - lastCombatStateSyncRef.current) > 50 ||
+          state.enemies.length !== newEnemies.length ||
+          state.lastAction !== lastActionUpdate ||
+          state.visualEffects.length !== activeEffects.length ||
+          playerTookDamage;
+
+      if (shouldSyncCombatState) {
+          lastCombatStateSyncRef.current = now;
+          setCombat(prev => {
+              if (prev.deathAnimationStart) return prev;
+              if (prev.enemies.length !== state.enemies.length) return prev;
+              return {
                   ...prev,
-                  playerPos: newPlayerPos,
-                  playerFacing: newPlayerFacing,
-                  playerAnimating: isMoving,
-                  lastAction: lastActionUpdate,
-                  visualEffects: activeEffects
+                  playerPos: nextCombatState.playerPos,
+                  playerFacing: nextCombatState.playerFacing,
+                  playerAnimating: nextCombatState.playerAnimating,
+                  enemies: nextCombatState.enemies,
+                  lastAction: nextCombatState.lastAction,
+                  visualEffects: nextCombatState.visualEffects
               };
-          }
-
-          return {
-              ...prev,
-              playerPos: newPlayerPos,
-              playerFacing: newPlayerFacing,
-              playerAnimating: isMoving,
-              enemies: newEnemies,
-              lastAction: lastActionUpdate,
-              visualEffects: activeEffects
-          };
-      });
+          });
+      }
 
       animationFrameRef.current = requestAnimationFrame(updateGame);
   };
@@ -1175,62 +1267,61 @@ export default function App() {
       )}
 
       {/* Sidebar: Stats */}
-      <aside className="w-full md:w-72 bg-slate-950 border-r border-slate-800 flex-shrink-0 flex flex-col min-h-0 overflow-hidden p-3 z-30 shadow-xl">
-        <h1 className="text-2xl font-bold text-amber-500 mb-2 cinzel text-center">Riddle & Steel</h1>
-        <div className="flex justify-center mb-4">
-             <div className="w-24 h-24 rounded-lg overflow-hidden border-2 border-amber-500 shadow-lg bg-slate-800 relative">
+      <aside className="w-full md:w-72 bg-slate-950 border-r border-slate-800 flex-shrink-0 flex flex-col min-h-0 overflow-hidden p-2 z-30 shadow-xl">
+        <h1 className="text-xl font-bold text-amber-500 mb-1 cinzel text-center">Riddle & Steel</h1>
+        <div className="flex justify-center mb-2">
+             <div className="w-20 h-20 rounded-md overflow-hidden border-2 border-amber-500 shadow-lg bg-slate-800 relative">
                  <PlayerAvatar 
                     playerClass={player.class}
                     className="w-full h-full object-contain pixel-render animate-breathe" 
                 />
             </div>
         </div>
-        <div className="text-center text-xs uppercase tracking-widest text-slate-500 mb-4 font-bold">{player.class}</div>
+        <div className="text-center text-[10px] uppercase tracking-widest text-slate-500 mb-2 font-bold">{player.class}</div>
         
-        <div className="space-y-4 mb-4 flex-1">
+        <div className="space-y-2.5 mb-2">
             <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-bold">Level</span>
-                <span className="font-bold text-xl text-white">{player.level}</span>
+                <span className="text-slate-400 font-bold text-sm">Level</span>
+                <span className="font-bold text-lg text-white">{player.level}</span>
             </div>
-            <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden border border-slate-700">
+            <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden border border-slate-700">
                 <div className="bg-amber-500 h-full transition-all duration-500" style={{ width: `${(player.xp / player.maxXp) * 100}%` }}></div>
             </div>
 
             <hr className="border-slate-800" />
 
-            <div className="grid grid-cols-2 gap-3">
-                <div className={`flex flex-col items-center p-3 bg-slate-900 rounded-lg border border-slate-800 transition-colors ${combat.isActive && combat.enemies.some(e => e.lastAttackTime > Date.now() - 200) ? 'border-red-500 bg-red-900/20' : ''}`}>
-                    <Activity size={18} className="text-red-500 mb-1" />
-                    <span className="text-[10px] text-slate-400 uppercase font-bold">Health</span>
-                    <span className="font-bold text-base">{player.hp} / {maxHp}</span>
+            <div className="grid grid-cols-3 gap-2">
+                <div className={`flex flex-col items-center justify-center p-2 bg-slate-900 rounded-md border border-slate-800 transition-colors ${combat.isActive && combat.enemies.some(e => e.lastAttackTime > Date.now() - 200) ? 'border-red-500 bg-red-900/20' : ''}`}>
+                    <Activity size={16} className="text-red-500" />
+                    <span className="font-bold text-sm leading-tight">{player.hp} / {maxHp}</span>
                 </div>
-                <div className="flex flex-col items-center p-3 bg-slate-900 rounded-lg border border-slate-800">
-                    <Coins size={18} className="text-yellow-500 mb-1" />
-                    <span className="text-[10px] text-slate-400 uppercase font-bold">Gold</span>
-                    <span className="font-bold text-base">{player.gold}</span>
+                <div className="flex flex-col items-center justify-center p-2 bg-slate-900 rounded-md border border-slate-800">
+                    <Sword size={16} className="text-blue-500" />
+                    <span className="font-bold text-sm leading-tight">{atk}</span>
                 </div>
-                <div className="flex flex-col items-center p-3 bg-slate-900 rounded-lg border border-slate-800">
-                    <Sword size={18} className="text-blue-500 mb-1" />
-                    <span className="text-[10px] text-slate-400 uppercase font-bold">Atk</span>
-                    <span className="font-bold text-base">{atk}</span>
+                <div className="flex flex-col items-center justify-center p-2 bg-slate-900 rounded-md border border-slate-800">
+                    <Shield size={16} className="text-green-500" />
+                    <span className="font-bold text-sm leading-tight">{def}</span>
                 </div>
-                <div className="flex flex-col items-center p-3 bg-slate-900 rounded-lg border border-slate-800">
-                    <Shield size={18} className="text-green-500 mb-1" />
-                    <span className="text-[10px] text-slate-400 uppercase font-bold">Def</span>
-                    <span className="font-bold text-base">{def}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5 bg-slate-900 rounded-md border border-slate-800">
+                <div className="flex items-center gap-1.5">
+                    <Coins size={16} className="text-yellow-500" />
+                    <span className="text-[10px] uppercase tracking-wide text-slate-400 font-bold">Gold</span>
                 </div>
+                <span className="font-bold text-sm text-white">{player.gold}</span>
             </div>
         </div>
 
-        <div className="space-y-2 overflow-y-auto flex-1 max-h-[30vh]">
-            <h3 className="text-[10px] uppercase tracking-widest text-slate-500 mb-1 font-bold">Equipment</h3>
-            {equipment.weapon ? <ItemCard item={equipment.weapon} isEquipped /> : <div className="p-3 border border-dashed border-slate-700 rounded text-center text-xs text-slate-600">No Weapon</div>}
-            {equipment.armor ? <ItemCard item={equipment.armor} isEquipped /> : <div className="p-3 border border-dashed border-slate-700 rounded text-center text-xs text-slate-600">No Armor</div>}
-            {equipment.accessory ? <ItemCard item={equipment.accessory} isEquipped /> : <div className="p-3 border border-dashed border-slate-700 rounded text-center text-xs text-slate-600">No Accessory</div>}
+        <div className="space-y-1.5 overflow-y-auto overflow-x-hidden flex-1 min-h-0">
+            <h3 className="text-[9px] uppercase tracking-widest text-slate-500 mb-0.5 font-bold">Equipment</h3>
+            {equipment.weapon ? <ItemCard item={equipment.weapon} isEquipped /> : <div className="p-2 border border-dashed border-slate-700 rounded text-center text-[11px] text-slate-600">No Weapon</div>}
+            {equipment.armor ? <ItemCard item={equipment.armor} isEquipped /> : <div className="p-2 border border-dashed border-slate-700 rounded text-center text-[11px] text-slate-600">No Armor</div>}
+            {equipment.accessory ? <ItemCard item={equipment.accessory} isEquipped /> : <div className="p-2 border border-dashed border-slate-700 rounded text-center text-[11px] text-slate-600">No Accessory</div>}
         </div>
 
-        <div className="mt-4">
-            <div ref={logsContainerRef} className="bg-black/60 backdrop-blur-md rounded-lg p-3 h-48 overflow-y-auto space-y-1.5 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent pointer-events-auto shadow-2xl border border-white/5">
+        <div className="mt-auto pt-2">
+            <div ref={logsContainerRef} className="bg-black/60 backdrop-blur-md rounded-lg p-3 h-36 overflow-y-auto space-y-1.5 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent pointer-events-auto shadow-2xl border border-white/5">
                 {logs.map(log => (
                     <div key={log.id} className={`text-xs font-mono animate-fade-in
                         ${log.type === 'combat' ? 'text-red-300' : 
