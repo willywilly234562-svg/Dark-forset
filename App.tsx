@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Activity, Shield, Sword, Coins, ShoppingBag, Tent, Ghost, Zap, Move, Skull, Heart, Wind, Hammer, LogOut, AlertTriangle, Key, UserPlus, Trash2 } from 'lucide-react';
+import { Activity, Shield, Sword, Coins, ShoppingBag, Tent, Ghost, Zap, Move, Skull, Heart, Wind, Hammer, LogOut, AlertTriangle, Key, UserPlus, Trash2, Beaker } from 'lucide-react';
 import { PlayerStats, Item, EquipmentSlots, LogEntry, PuzzleState, Enemy, PlayerClass } from './types';
 import { INITIAL_PLAYER_STATS, BASIC_ITEMS, MONSTER_NAMES, MONSTER_SPRITES, SHOP_ITEMS } from './constants';
 import ItemCard from './components/ItemCard';
@@ -10,10 +10,53 @@ import { generateRiddle, verifyRiddleAnswer, generateLegendaryItem } from './ser
 
 // --- Utils ---
 const uuid = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
+const randomInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+const getTierForLevel = (level: number) => {
+  if (level <= ECONOMY_TIERS.early.maxLevel) return 'early' as const;
+  if (level <= ECONOMY_TIERS.mid.maxLevel) return 'mid' as const;
+  return 'late' as const;
+};
 
 // --- CONSTANTS ---
 const GAME_SCALE = 1.45; // Zoom factor (Balanced between 1.0 and 1.75)
 const SAVE_KEY = 'dark-forest-saves';
+const TILE_UNIT_SIZE = 10;
+const COMBAT_RANGES = {
+  playerMeleeReach: TILE_UNIT_SIZE * 1.5,
+  enemyMeleeReach: TILE_UNIT_SIZE * 0.5,
+  bossMeleeReach: TILE_UNIT_SIZE * 0.75,
+};
+
+const RANGED_ATTACK_MULTIPLIER = 2.0;
+const MAX_ATTACK_REACH = TILE_UNIT_SIZE * 6.0;
+const POTION_DROP_CHANCE = 0.04;
+
+const ECONOMY_TIERS = {
+  early: { minLevel: 1, maxLevel: 6 },
+  mid: { minLevel: 7, maxLevel: 14 },
+  late: { minLevel: 15, maxLevel: Infinity },
+} as const;
+
+const ECONOMY_GOLD = {
+  normal: { min: 0, max: 2 },
+  elite: { min: 3, max: 8 },
+  boss: {
+    early: { min: 25, max: 50 },
+    mid: { min: 50, max: 75 },
+    late: { min: 75, max: 125 },
+  },
+} as const;
+
+const ECONOMY_LOOT = {
+  commonDropChance: { normal: 0.18, elite: 0.35 },
+  rareDropChance: { normal: 0.02, elite: 0.04 },
+  rareValueRange: { min: 100, max: 500 },
+  bossValueRange: {
+    early: { min: 300, max: 800 },
+    mid: { min: 801, max: 2000 },
+    late: { min: 2001, max: 5000 },
+  },
+} as const;
 
 const createDefaultEquipment = (): EquipmentSlots => ({ weapon: null, armor: null, accessory: null });
 
@@ -55,6 +98,9 @@ interface CombatState {
     killerName: string | null; // Track who killed the player
     isAttacking: boolean; // Animation state for attacking
 }
+
+const isHealthPotion = (item: Item) => item.id === 'potion-red' || item.name === 'Health Potion';
+const isVitalityElixir = (item: Item) => item.id === 'elixir-vitality' || item.name === 'Elixir of Vitality';
 
 interface CharacterState {
   player: PlayerStats;
@@ -182,6 +228,7 @@ export default function App() {
   const equipmentRef = useRef(equipment);
   const combatResultRef = useRef(combatResult);
   const skillCooldownsRef = useRef(skillCooldowns);
+  const inventoryRef = useRef(inventory);
   const lastPlayerAttackTime = useRef(0);
   const keysPressed = useRef<Set<string>>(new Set());
   const animationFrameRef = useRef<number>(0);
@@ -195,6 +242,7 @@ export default function App() {
   useEffect(() => { equipmentRef.current = equipment; }, [equipment]);
   useEffect(() => { combatResultRef.current = combatResult; }, [combatResult]);
   useEffect(() => { skillCooldownsRef.current = skillCooldowns; }, [skillCooldowns]);
+  useEffect(() => { inventoryRef.current = inventory; }, [inventory]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -452,6 +500,8 @@ export default function App() {
               if (key === ' ') handleSkill('dash');
               if (key === 'e') handleSkill('special');
               if (key === 'q') handleSkill('block');
+              if (key === 'r') useHealthPotion();
+              if (key === 't') useVitalityElixir();
           }
       };
       const handleKeyUp = (e: KeyboardEvent) => keysPressed.current.delete(e.key.toLowerCase());
@@ -663,6 +713,84 @@ export default function App() {
       }
   };
 
+  const consumeInventoryItem = (predicate: (item: Item) => boolean, onConsume: (item: Item) => void) => {
+    const currentInventory = inventoryRef.current;
+    const index = currentInventory.findIndex(predicate);
+    if (index === -1) return false;
+    const item = currentInventory[index];
+    const nextInventory = [...currentInventory];
+    nextInventory.splice(index, 1);
+    setInventory(nextInventory);
+    onConsume(item);
+    return true;
+  };
+
+  const consumeEquippedAccessory = (predicate: (item: Item) => boolean, onConsume: (item: Item) => void) => {
+    const accessory = equipmentRef.current.accessory;
+    if (!accessory || !predicate(accessory)) return false;
+    setEquipment(prev => ({ ...prev, accessory: null }));
+    onConsume(accessory);
+    return true;
+  };
+
+  const useHealthPotion = () => {
+    if (!combatRef.current.isActive || combatRef.current.deathAnimationStart) return;
+    if (playerRef.current.hp <= 0) return;
+    const { maxHp } = getStats(playerRef.current, equipmentRef.current);
+    const didConsume = consumeInventoryItem(isHealthPotion, () => {
+      const healAmount = 50;
+      setPlayer(prev => ({ ...prev, hp: Math.min(maxHp, prev.hp + healAmount) }));
+      setCombat(prev => ({
+        ...prev,
+        lastAction: `Used Health Potion (+${healAmount} HP).`,
+        visualEffects: [...prev.visualEffects, { id: uuid(), x: prev.playerPos.x, y: prev.playerPos.y, type: 'heal', timestamp: Date.now() }]
+      }));
+      addLog('Consumed Health Potion.', 'info');
+    }) || consumeEquippedAccessory(isHealthPotion, () => {
+      const healAmount = 50;
+      setPlayer(prev => ({ ...prev, hp: Math.min(maxHp, prev.hp + healAmount) }));
+      setCombat(prev => ({
+        ...prev,
+        lastAction: `Used Health Potion (+${healAmount} HP).`,
+        visualEffects: [...prev.visualEffects, { id: uuid(), x: prev.playerPos.x, y: prev.playerPos.y, type: 'heal', timestamp: Date.now() }]
+      }));
+      addLog('Consumed Health Potion.', 'info');
+    });
+
+    if (!didConsume) {
+      addLog('No Health Potion in inventory.', 'error');
+    }
+  };
+
+  const useVitalityElixir = () => {
+    if (!combatRef.current.isActive || combatRef.current.deathAnimationStart) return;
+    if (playerRef.current.hp <= 0) return;
+    const { maxHp } = getStats(playerRef.current, equipmentRef.current);
+    const didConsume = consumeInventoryItem(isVitalityElixir, () => {
+      const healAmount = 150;
+      setPlayer(prev => ({ ...prev, hp: Math.min(maxHp, prev.hp + healAmount) }));
+      setCombat(prev => ({
+        ...prev,
+        lastAction: `Used Vitality Elixir (+${healAmount} HP).`,
+        visualEffects: [...prev.visualEffects, { id: uuid(), x: prev.playerPos.x, y: prev.playerPos.y, type: 'heal', timestamp: Date.now() }]
+      }));
+      addLog('Consumed Elixir of Vitality.', 'info');
+    }) || consumeEquippedAccessory(isVitalityElixir, () => {
+      const healAmount = 150;
+      setPlayer(prev => ({ ...prev, hp: Math.min(maxHp, prev.hp + healAmount) }));
+      setCombat(prev => ({
+        ...prev,
+        lastAction: `Used Vitality Elixir (+${healAmount} HP).`,
+        visualEffects: [...prev.visualEffects, { id: uuid(), x: prev.playerPos.x, y: prev.playerPos.y, type: 'heal', timestamp: Date.now() }]
+      }));
+      addLog('Consumed Elixir of Vitality.', 'info');
+    });
+
+    if (!didConsume) {
+      addLog('No Elixir of Vitality in inventory.', 'error');
+    }
+  };
+
 
   // --- Game Actions ---
 
@@ -670,7 +798,9 @@ export default function App() {
     const currentLevel = playerRef.current.level;
     const waveSize = Math.floor(Math.random() * 16) + 5; // 5 to 20 enemies
     const newEnemies: Enemy[] = [];
+    const enemyBaseMeta: Array<{ baseName: string; level: number; baseHp: number; baseAttack: number }> = [];
     const playerPos = combatRef.current.playerPos;
+    let bossCount = 0;
 
     for (let i = 0; i < waveSize; i++) {
         const enemyLevel = Math.max(1, currentLevel + Math.floor(Math.random() * 3) - 1);
@@ -686,12 +816,13 @@ export default function App() {
         let namePrefix = "";
         let nameSuffix = "";
 
-        if (roll > 0.95) {
+        if (roll > 0.95 && bossCount < 2) {
             rank = 'BOSS';
             rankMultiplier = 5; 
             namePrefix = "The Dread ";
             nameSuffix = " the Undying";
             attack = Math.floor(attack * 1.8); 
+            bossCount += 1;
         } else if (roll > 0.85) {
             rank = 'ELITE';
             rankMultiplier = 2; 
@@ -727,6 +858,30 @@ export default function App() {
             lastAttackTime: 0,
             isHit: false
         });
+        enemyBaseMeta.push({ baseName, level: enemyLevel, baseHp, baseAttack: enemyLevel * 4 + 8 });
+    }
+
+    if (bossCount === 0 && newEnemies.length > 0) {
+        let bossIndex = 0;
+        for (let i = 1; i < newEnemies.length; i++) {
+            if (newEnemies[i].level > newEnemies[bossIndex].level) {
+                bossIndex = i;
+            }
+        }
+
+        const meta = enemyBaseMeta[bossIndex];
+        const promotedName = `The Dread ${meta.baseName} the Undying`;
+        const promotedAttack = Math.floor(meta.baseAttack * 1.8);
+        const promotedHp = Math.floor(meta.baseHp * 5);
+        newEnemies[bossIndex] = {
+            ...newEnemies[bossIndex],
+            name: `${promotedName} (Lvl ${meta.level})`,
+            rank: 'BOSS',
+            attack: promotedAttack,
+            hp: promotedHp,
+            maxHp: promotedHp
+        };
+        bossCount = 1;
     }
 
     setCombat(prev => ({
@@ -957,7 +1112,6 @@ export default function App() {
           if (width > 0 && height > 0) {
               const ctx = cvs.getContext('2d');
               if (ctx) {
-                  const TILE_UNIT_SIZE = 10;
                   const pxPerUnit = width / (100 / GAME_SCALE);
                   const tilePixelSize = TILE_UNIT_SIZE * pxPerUnit;
                   const cols = Math.ceil(width / tilePixelSize) + 2;
@@ -1048,7 +1202,9 @@ export default function App() {
           }
 
           // Attack Logic
-          const attackRange = enemy.rank === 'BOSS' ? 12 : 8; 
+          const attackRange = enemy.rank === 'BOSS'
+              ? COMBAT_RANGES.bossMeleeReach
+              : COMBAT_RANGES.enemyMeleeReach;
           
           // Cooldown Logic
           let baseCooldown = 1500 - (enemy.level * 40);
@@ -1184,7 +1340,11 @@ export default function App() {
     });
 
     // --- INCREASED ATTACK RANGE ---
-    const attackRange = 30; // Increased from 15
+    const weapon = equipmentRef.current.weapon;
+    const hasBowEquipped = weapon ? /bow/i.test(weapon.name) : false;
+    const baseReach = COMBAT_RANGES.playerMeleeReach;
+    const reach = hasBowEquipped ? baseReach * RANGED_ATTACK_MULTIPLIER : baseReach;
+    const attackRange = Math.min(reach, MAX_ATTACK_REACH);
 
     if (closestEnemyIndex === -1 || minDist > attackRange) {
         setCombat(prev => ({ ...prev, lastAction: "Too far away!", isAttacking: true })); // Still animate miss
@@ -1252,18 +1412,59 @@ export default function App() {
   const handleKillRewards = (enemy: Enemy) => {
     const rankMultiplier = enemy.rank === 'BOSS' ? 10 : (enemy.rank === 'ELITE' ? 3 : 1);
     const xpGain = (enemy.level * 15) * rankMultiplier;
-    const goldGain = (enemy.level * 25 + Math.floor(Math.random() * 50) + 15) * rankMultiplier;
+    const tier = getTierForLevel(enemy.level);
+
+    let goldGain = 0;
+    if (enemy.rank === 'BOSS') {
+        goldGain = randomInt(ECONOMY_GOLD.boss[tier].min, ECONOMY_GOLD.boss[tier].max);
+    } else if (enemy.rank === 'ELITE') {
+        goldGain = randomInt(ECONOMY_GOLD.elite.min, ECONOMY_GOLD.elite.max);
+    } else {
+        goldGain = randomInt(ECONOMY_GOLD.normal.min, ECONOMY_GOLD.normal.max);
+    }
 
     // Loot Logic
-    let lootChance = 0.15;
-    if (enemy.rank === 'ELITE') lootChance = 0.5;
-    if (enemy.rank === 'BOSS') lootChance = 1.0; 
+    const commonLootChance = enemy.rank === 'ELITE'
+        ? ECONOMY_LOOT.commonDropChance.elite
+        : ECONOMY_LOOT.commonDropChance.normal;
+    const rareLootChance = enemy.rank === 'ELITE'
+        ? ECONOMY_LOOT.rareDropChance.elite
+        : ECONOMY_LOOT.rareDropChance.normal;
 
-    if (Math.random() < lootChance) {
+    const rareDropPool = SHOP_ITEMS.filter(item => {
+        if (item.value < ECONOMY_LOOT.rareValueRange.min) return false;
+        if (item.value > ECONOMY_LOOT.rareValueRange.max) return false;
+        return true;
+    });
+
+    if (enemy.rank !== 'BOSS' && Math.random() < rareLootChance && rareDropPool.length > 0) {
+        const rareLoot = rareDropPool[Math.floor(Math.random() * rareDropPool.length)];
+        const rareLootItem = { ...rareLoot, id: uuid() };
+        setInventory(prev => [...prev, rareLootItem]);
+        addLog(`Found rare loot: ${rareLootItem.name}!`, 'loot');
+    } else if (enemy.rank !== 'BOSS' && Math.random() < commonLootChance) {
         const loot = BASIC_ITEMS[Math.floor(Math.random() * BASIC_ITEMS.length)];
         const lootItem = { ...loot, id: uuid() };
         setInventory(prev => [...prev, lootItem]);
         addLog(`Looted: ${lootItem.name}!`, 'loot');
+    }
+
+    if (enemy.rank === 'BOSS') {
+        const bossRange = ECONOMY_LOOT.bossValueRange[tier];
+        const bossLootPool = SHOP_ITEMS.filter(item => item.value >= bossRange.min && item.value <= bossRange.max);
+        if (bossLootPool.length > 0) {
+            const bossLoot = bossLootPool[Math.floor(Math.random() * bossLootPool.length)];
+            const bossLootItem = { ...bossLoot, id: uuid() };
+            setInventory(prev => [...prev, bossLootItem]);
+            addLog(`Boss trophy: ${bossLootItem.name}!`, 'loot');
+        }
+    }
+
+    if (Math.random() < POTION_DROP_CHANCE) {
+        const potionTemplate = SHOP_ITEMS.find(item => item.id === 'potion-red') ?? SHOP_ITEMS[0];
+        const potionItem = { ...potionTemplate, id: uuid() };
+        setInventory(prev => [...prev, potionItem]);
+        addLog('Found a Health Potion!', 'loot');
     }
 
     setPlayer(prev => {
@@ -1341,20 +1542,6 @@ export default function App() {
 
   const buyItem = (item: Item) => {
     if (player.gold >= item.value) {
-        if (item.id === 'potion-red') {
-            const { maxHp } = getStats(player, equipment);
-            setPlayer(prev => ({ ...prev, hp: Math.min(maxHp, prev.hp + 50), gold: prev.gold - item.value }));
-            addLog("Used Health Potion.", 'info');
-            return;
-        }
-
-        if (item.id === 'elixir-vitality') {
-            const { maxHp } = getStats(player, equipment);
-            setPlayer(prev => ({ ...prev, hp: Math.min(maxHp, prev.hp + 150), gold: prev.gold - item.value }));
-            addLog("Used Elixir of Vitality.", 'info');
-            return;
-        }
-
       setPlayer(prev => ({ ...prev, gold: prev.gold - item.value }));
       const newItem = { ...item, id: uuid() };
       setInventory(prev => [...prev, newItem]);
@@ -2029,6 +2216,26 @@ export default function App() {
                                                 )}
                                             </div>
 
+                                            {/* Health Potion */}
+                                            <div className="relative group cursor-pointer" onClick={useHealthPotion}>
+                                                <div className={`w-12 h-12 rounded-lg border-2 flex items-center justify-center transition-all 
+                                                    ${inventory.some(isHealthPotion) ? 'bg-red-950 border-red-400 hover:bg-red-900' : 'bg-slate-800 border-slate-600 opacity-50'}
+                                                `}>
+                                                    <Beaker size={20} className="text-white" />
+                                                </div>
+                                                <span className="absolute -top-2 -right-2 bg-slate-900 text-[10px] font-bold px-1.5 py-0.5 rounded border border-slate-700 text-slate-300">R</span>
+                                            </div>
+
+                                            {/* Vitality Elixir */}
+                                            <div className="relative group cursor-pointer" onClick={useVitalityElixir}>
+                                                <div className={`w-12 h-12 rounded-lg border-2 flex items-center justify-center transition-all 
+                                                    ${inventory.some(isVitalityElixir) ? 'bg-purple-950 border-purple-400 hover:bg-purple-900' : 'bg-slate-800 border-slate-600 opacity-50'}
+                                                `}>
+                                                    <Beaker size={20} className="text-white" />
+                                                </div>
+                                                <span className="absolute -top-2 -right-2 bg-slate-900 text-[10px] font-bold px-1.5 py-0.5 rounded border border-slate-700 text-slate-300">T</span>
+                                            </div>
+
                                         </div>
                                     </div>
                                     <button 
@@ -2046,7 +2253,7 @@ export default function App() {
                 
                 {/* Inventory Tab */}
                 {activeTab === 'INVENTORY' && (
-                    <div className="animate-fade-in p-4 grid grid-cols-2 md:grid-cols-4 gap-4 overflow-y-auto flex-1 min-h-0">
+                    <div className="animate-fade-in p-4 grid grid-cols-2 md:grid-cols-4 gap-4 overflow-y-auto flex-1 min-h-0 content-start auto-rows-max items-start">
                         {inventory.length === 0 ? (
                              <div className="col-span-full text-center text-slate-500 py-20">Inventory is empty. Go hunt!</div>
                         ) : (
@@ -2056,6 +2263,7 @@ export default function App() {
                                     item={item} 
                                     onEquip={equipItem} 
                                     onSell={sellItem}
+                                    displayValue={Math.floor(item.value / 2)}
                                 />
                             ))
                         )}

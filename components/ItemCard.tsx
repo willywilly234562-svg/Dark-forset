@@ -7,6 +7,7 @@ interface ItemCardProps {
   onEquip?: (item: Item) => void;
   onSell?: (item: Item) => void;
   isEquipped?: boolean;
+  displayValue?: number;
 }
 
 const rarityColors = {
@@ -17,9 +18,21 @@ const rarityColors = {
   [ItemRarity.MYTHIC]: 'border-red-600 bg-red-950/40 text-red-100 shadow-[0_0_30px_rgba(220,38,38,0.6)] animate-pulse border-2',
 };
 
-const ItemCard: React.FC<ItemCardProps> = ({ item, onEquip, onSell, isEquipped }) => {
+const isConsumable = (item: Item) => {
+  if (item.id === 'potion-red' || item.id === 'elixir-vitality') return true;
+  if (item.name === 'Health Potion' || item.name === 'Elixir of Vitality') return true;
+  return false;
+};
+
+const ItemCard: React.FC<ItemCardProps> = ({ item, onEquip, onSell, isEquipped, displayValue }) => {
   const Icon = item.type === ItemType.WEAPON ? Sword : item.type === ItemType.ARMOR ? Shield : Gem;
   const isMythic = item.rarity === ItemRarity.MYTHIC;
+  const canEquip = Boolean(onEquip) && !isEquipped && !isConsumable(item);
+  const valueToShow = displayValue ?? item.value;
+  const attackValue = item.stats.attack ?? 0;
+  const defenseValue = item.stats.defense ?? 0;
+  const hpValue = item.stats.hpBonus ?? 0;
+  const hasStats = attackValue > 0 || defenseValue > 0 || hpValue > 0;
 
   return (
     <div className={`relative p-2 rounded-md border-2 flex flex-col gap-1.5 transition-transform hover:scale-[1.02] ${rarityColors[item.rarity]}`}>
@@ -35,20 +48,22 @@ const ItemCard: React.FC<ItemCardProps> = ({ item, onEquip, onSell, isEquipped }
       
       <p className="text-[11px] italic opacity-80 leading-snug min-h-[2em]">{item.description}</p>
       
-      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px]">
-        {item.stats.attack && <span className="text-red-300">ATK +{item.stats.attack}</span>}
-        {item.stats.defense && <span className="text-blue-300">DEF +{item.stats.defense}</span>}
-        {item.stats.hpBonus && <span className="text-green-300">HP +{item.stats.hpBonus}</span>}
-      </div>
+      {hasStats && (
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px]">
+          {attackValue > 0 && <span className="text-red-300">ATK +{attackValue}</span>}
+          {defenseValue > 0 && <span className="text-blue-300">DEF +{defenseValue}</span>}
+          {hpValue > 0 && <span className="text-green-300">HP +{hpValue}</span>}
+        </div>
+      )}
 
       <div className="mt-auto flex justify-between items-center pt-1.5 border-t border-white/10">
         <span className="flex items-center gap-1 text-[11px] text-yellow-500">
-            <Coins size={11} /> {item.value}
+            <Coins size={11} /> {valueToShow}
         </span>
         <div className="flex gap-1.5">
-            {onEquip && !isEquipped && (
+            {canEquip && (
                 <button 
-                    onClick={() => onEquip(item)}
+                    onClick={() => onEquip?.(item)}
                     className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 rounded text-[11px] font-bold transition-colors"
                 >
                     Equip
