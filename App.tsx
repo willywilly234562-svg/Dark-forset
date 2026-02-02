@@ -101,6 +101,45 @@ interface CombatState {
 
 const isHealthPotion = (item: Item) => item.id === 'potion-red' || item.name === 'Health Potion';
 const isVitalityElixir = (item: Item) => item.id === 'elixir-vitality' || item.name === 'Elixir of Vitality';
+const isPotionItem = (item: Item) => isHealthPotion(item) || isVitalityElixir(item);
+
+type ItemCategory = 'POTIONS' | 'ATTACK' | 'DEFENSE' | 'ACCESSORY';
+
+const getItemCategory = (item: Item): ItemCategory => {
+  if (isPotionItem(item)) return 'POTIONS';
+  if (item.type === 'WEAPON') return 'ATTACK';
+  if (item.type === 'ARMOR') return 'DEFENSE';
+  return 'ACCESSORY';
+};
+
+const CATEGORY_ORDER: ItemCategory[] = ['POTIONS', 'ATTACK', 'DEFENSE', 'ACCESSORY'];
+
+const CATEGORY_LABELS: Record<ItemCategory, string> = {
+  POTIONS: 'Potions',
+  ATTACK: 'Attack',
+  DEFENSE: 'Defense',
+  ACCESSORY: 'Accessory',
+};
+
+const buildCategoryGroups = (items: Item[]) => {
+  const groups: Record<ItemCategory, Item[]> = {
+    POTIONS: [],
+    ATTACK: [],
+    DEFENSE: [],
+    ACCESSORY: [],
+  };
+
+  items.forEach((item) => {
+    const category = getItemCategory(item);
+    groups[category].push(item);
+  });
+
+  CATEGORY_ORDER.forEach((category) => {
+    groups[category] = [...groups[category]].sort((a, b) => a.value - b.value);
+  });
+
+  return groups;
+};
 
 interface CharacterState {
   player: PlayerStats;
@@ -2253,19 +2292,36 @@ export default function App() {
                 
                 {/* Inventory Tab */}
                 {activeTab === 'INVENTORY' && (
-                    <div className="animate-fade-in p-4 grid grid-cols-2 md:grid-cols-4 gap-4 overflow-y-auto flex-1 min-h-0 content-start auto-rows-max items-start">
+                    <div className="animate-fade-in p-4 flex flex-col gap-6 overflow-y-auto flex-1 min-h-0">
                         {inventory.length === 0 ? (
-                             <div className="col-span-full text-center text-slate-500 py-20">Inventory is empty. Go hunt!</div>
+                             <div className="text-center text-slate-500 py-20">Inventory is empty. Go hunt!</div>
                         ) : (
-                            inventory.map((item) => (
-                                <ItemCard 
-                                    key={item.id} 
-                                    item={item} 
-                                    onEquip={equipItem} 
-                                    onSell={sellItem}
-                                    displayValue={Math.floor(item.value / 2)}
-                                />
-                            ))
+                            (() => {
+                                const groups = buildCategoryGroups(inventory);
+                                return CATEGORY_ORDER.map((category) => {
+                                    const groupItems = groups[category];
+                                    if (groupItems.length === 0) return null;
+                                    return (
+                                        <section key={category} className="space-y-3">
+                                            <div className="flex items-center gap-3">
+                                                <h3 className="text-xs uppercase tracking-[0.3em] text-slate-400 font-bold">{CATEGORY_LABELS[category]}</h3>
+                                                <div className="flex-1 h-px bg-slate-800"></div>
+                                            </div>
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 content-start auto-rows-max items-start">
+                                                {groupItems.map((item) => (
+                                                    <ItemCard 
+                                                        key={item.id} 
+                                                        item={item} 
+                                                        onEquip={equipItem} 
+                                                        onSell={sellItem}
+                                                        displayValue={Math.floor(item.value / 2)}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </section>
+                                    );
+                                });
+                            })()
                         )}
                     </div>
                 )}
@@ -2274,18 +2330,35 @@ export default function App() {
                 {activeTab === 'SHOP' && (
                     <div className="animate-fade-in p-4 flex flex-col flex-1 min-h-0 overflow-hidden">
                         <h2 className="text-center text-2xl cinzel text-yellow-500 mb-6">The Traveling Merchant</h2>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 flex-1 min-h-0 overflow-y-scroll pb-24 pr-2 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-                            {SHOP_ITEMS.map((item) => (
-                                <div key={item.id} className="relative group">
-                                     <ItemCard item={item} />
-                                     <button 
-                                        onClick={() => buyItem(item)}
-                                        className="absolute bottom-2 right-2 left-2 bg-yellow-700 hover:bg-yellow-600 text-white font-bold py-1 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                                     >
-                                         Buy ({item.value} G)
-                                     </button>
-                                </div>
-                            ))}
+                        <div className="flex-1 min-h-0 overflow-y-scroll pb-24 pr-2 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+                            {(() => {
+                                const groups = buildCategoryGroups(SHOP_ITEMS);
+                                return CATEGORY_ORDER.map((category) => {
+                                    const groupItems = groups[category];
+                                    if (groupItems.length === 0) return null;
+                                    return (
+                                        <section key={category} className="space-y-3 mb-8 last:mb-0">
+                                            <div className="flex items-center gap-3">
+                                                <h3 className="text-xs uppercase tracking-[0.3em] text-slate-400 font-bold">{CATEGORY_LABELS[category]}</h3>
+                                                <div className="flex-1 h-px bg-slate-800"></div>
+                                            </div>
+                                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                                                {groupItems.map((item) => (
+                                                    <div key={item.id} className="relative group">
+                                                         <ItemCard item={item} />
+                                                         <button 
+                                                            onClick={() => buyItem(item)}
+                                                            className="absolute bottom-2 right-2 left-2 bg-yellow-700 hover:bg-yellow-600 text-white font-bold py-1 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                                                         >
+                                                             Buy ({item.value} G)
+                                                         </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </section>
+                                    );
+                                });
+                            })()}
                         </div>
                     </div>
                 )}

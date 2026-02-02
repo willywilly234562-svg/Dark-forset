@@ -1,6 +1,6 @@
 import React from 'react';
 import { Item, ItemRarity, ItemType } from '../types';
-import { Sword, Shield, Gem, Coins, Flame } from 'lucide-react';
+import { Sword, Shield, Gem, Coins, Flame, Beaker } from 'lucide-react';
 
 interface ItemCardProps {
   item: Item;
@@ -24,8 +24,14 @@ const isConsumable = (item: Item) => {
   return false;
 };
 
+const isPotionItem = (item: Item) => {
+  if (item.id === 'potion-red' || item.id === 'elixir-vitality') return true;
+  if (item.name === 'Health Potion' || item.name === 'Elixir of Vitality') return true;
+  return false;
+};
+
 const ItemCard: React.FC<ItemCardProps> = ({ item, onEquip, onSell, isEquipped, displayValue }) => {
-  const Icon = item.type === ItemType.WEAPON ? Sword : item.type === ItemType.ARMOR ? Shield : Gem;
+  const Icon = isPotionItem(item) ? Beaker : item.type === ItemType.WEAPON ? Sword : item.type === ItemType.ARMOR ? Shield : Gem;
   const isMythic = item.rarity === ItemRarity.MYTHIC;
   const canEquip = Boolean(onEquip) && !isEquipped && !isConsumable(item);
   const valueToShow = displayValue ?? item.value;
@@ -49,7 +55,7 @@ const ItemCard: React.FC<ItemCardProps> = ({ item, onEquip, onSell, isEquipped, 
       <p className="text-[11px] italic opacity-80 leading-snug min-h-[2em]">{item.description}</p>
       
       {hasStats && (
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px]">
+        <div className="flex flex-nowrap items-center gap-2 text-[11px]">
           {attackValue > 0 && <span className="text-red-300">ATK +{attackValue}</span>}
           {defenseValue > 0 && <span className="text-blue-300">DEF +{defenseValue}</span>}
           {hpValue > 0 && <span className="text-green-300">HP +{hpValue}</span>}
