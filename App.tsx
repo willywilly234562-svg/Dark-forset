@@ -1083,7 +1083,7 @@ export default function App() {
   // CHARACTER SELECTION SCREEN
   if (player.class === 'NONE') {
       return (
-          <div className="h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
+          <div className="h-[100dvh] bg-slate-900 text-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
                <div className="absolute inset-0 bg-[url('https://picsum.photos/1920/1080?grayscale&blur=2')] bg-cover bg-center opacity-30"></div>
                <div className="relative z-10 max-w-4xl w-full">
                    <h1 className="text-5xl cinzel font-bold text-center text-amber-500 mb-12 drop-shadow-lg">Choose Your Path</h1>
@@ -1159,7 +1159,7 @@ export default function App() {
   const now = Date.now();
 
   return (
-    <div className="h-screen bg-slate-900 text-slate-100 flex flex-col md:flex-row overflow-hidden font-sans relative">
+    <div className="h-[100dvh] bg-slate-900 text-slate-100 flex flex-col md:flex-row overflow-hidden font-sans relative">
       
       {/* MODALS */}
       <ApiKeyModal 
@@ -1175,7 +1175,7 @@ export default function App() {
       )}
 
       {/* Sidebar: Stats */}
-      <aside className="w-full md:w-72 bg-slate-950 border-r border-slate-800 flex-shrink-0 flex flex-col p-3 z-30 shadow-xl">
+      <aside className="w-full md:w-72 bg-slate-950 border-r border-slate-800 flex-shrink-0 flex flex-col min-h-0 overflow-hidden p-3 z-30 shadow-xl">
         <h1 className="text-2xl font-bold text-amber-500 mb-2 cinzel text-center">Riddle & Steel</h1>
         <div className="flex justify-center mb-4">
              <div className="w-24 h-24 rounded-lg overflow-hidden border-2 border-amber-500 shadow-lg bg-slate-800 relative">
@@ -1228,10 +1228,26 @@ export default function App() {
             {equipment.armor ? <ItemCard item={equipment.armor} isEquipped /> : <div className="p-3 border border-dashed border-slate-700 rounded text-center text-xs text-slate-600">No Armor</div>}
             {equipment.accessory ? <ItemCard item={equipment.accessory} isEquipped /> : <div className="p-3 border border-dashed border-slate-700 rounded text-center text-xs text-slate-600">No Accessory</div>}
         </div>
+
+        <div className="mt-4">
+            <div ref={logsContainerRef} className="bg-black/60 backdrop-blur-md rounded-lg p-3 h-48 overflow-y-auto space-y-1.5 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent pointer-events-auto shadow-2xl border border-white/5">
+                {logs.map(log => (
+                    <div key={log.id} className={`text-xs font-mono animate-fade-in
+                        ${log.type === 'combat' ? 'text-red-300' : 
+                          log.type === 'loot' ? 'text-yellow-300' : 
+                          log.type === 'puzzle' ? 'text-purple-300' : 
+                          log.type === 'error' ? 'text-red-500 font-bold' : 'text-slate-300'}`}>
+                        <span className="opacity-50 mr-2">[{new Date(log.timestamp).toLocaleTimeString([], {hour12: false, hour: "2-digit", minute:"2-digit", second:"2-digit"})}]</span>
+                        {log.message}
+                    </div>
+                ))}
+                {logs.length === 0 && <div className="text-slate-600 text-xs italic text-center mt-10">Journal is empty...</div>}
+            </div>
+        </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
         
         {/* Top Navigation */}
         <nav className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur flex items-center justify-between gap-4 px-4 flex-shrink-0 z-[110]">
@@ -1268,11 +1284,11 @@ export default function App() {
         </nav>
 
         {/* View Content Wrapper - NO SCROLL for Combat */}
-        <div className="flex-1 overflow-hidden relative bg-[url('https://images.unsplash.com/photo-1542259698-2713de42080d?q=80&w=2000&auto=format&fit=crop')] bg-cover bg-center flex flex-col transition-all duration-1000">
+        <div className="flex-1 min-h-0 overflow-hidden relative bg-[url('https://images.unsplash.com/photo-1542259698-2713de42080d?q=80&w=2000&auto=format&fit=crop')] bg-cover bg-center flex flex-col transition-all duration-1000">
             <div className="absolute inset-0 bg-gradient-to-b from-slate-950/80 via-slate-900/60 to-slate-950/90 pointer-events-none"></div>
             
             {/* Scrollable Container */}
-            <div className="relative z-10 flex-1 w-full max-w-[95%] mx-auto p-4 flex flex-col overflow-hidden">
+            <div className="relative z-10 flex-1 min-h-0 w-full max-w-[95%] mx-auto p-4 flex flex-col overflow-hidden">
                 
                 {/* Adventure Tab */}
                 {activeTab === 'ADVENTURE' && (
@@ -1584,7 +1600,7 @@ export default function App() {
                 
                 {/* Inventory Tab */}
                 {activeTab === 'INVENTORY' && (
-                    <div className="animate-fade-in p-4 grid grid-cols-2 md:grid-cols-4 gap-4 overflow-y-auto">
+                    <div className="animate-fade-in p-4 grid grid-cols-2 md:grid-cols-4 gap-4 overflow-y-auto flex-1 min-h-0">
                         {inventory.length === 0 ? (
                              <div className="col-span-full text-center text-slate-500 py-20">Inventory is empty. Go hunt!</div>
                         ) : (
@@ -1602,9 +1618,9 @@ export default function App() {
 
                 {/* Shop Tab */}
                 {activeTab === 'SHOP' && (
-                    <div className="animate-fade-in p-4">
+                    <div className="animate-fade-in p-4 flex flex-col flex-1 min-h-0 overflow-hidden">
                         <h2 className="text-center text-2xl cinzel text-yellow-500 mb-6">The Traveling Merchant</h2>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 overflow-y-auto pb-20">
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 flex-1 min-h-0 overflow-y-scroll pb-24 pr-2 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
                             {SHOP_ITEMS.map((item) => (
                                 <div key={item.id} className="relative group">
                                      <ItemCard item={item} />
@@ -1680,23 +1696,6 @@ export default function App() {
 
             </div>
             
-            {/* LOG CONSOLE OVERLAY - Bottom Left */}
-            <div className="absolute bottom-4 left-4 z-[150] w-[350px] pointer-events-none opacity-80 hover:opacity-100 transition-opacity">
-                 <div ref={logsContainerRef} className="bg-black/60 backdrop-blur-md rounded-lg p-3 h-48 overflow-y-auto space-y-1.5 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent pointer-events-auto shadow-2xl border border-white/5">
-                    {logs.map(log => (
-                        <div key={log.id} className={`text-xs font-mono animate-fade-in
-                            ${log.type === 'combat' ? 'text-red-300' : 
-                              log.type === 'loot' ? 'text-yellow-300' : 
-                              log.type === 'puzzle' ? 'text-purple-300' : 
-                              log.type === 'error' ? 'text-red-500 font-bold' : 'text-slate-300'}`}>
-                            <span className="opacity-50 mr-2">[{new Date(log.timestamp).toLocaleTimeString([], {hour12: false, hour: "2-digit", minute:"2-digit", second:"2-digit"})}]</span>
-                            {log.message}
-                        </div>
-                    ))}
-                    {logs.length === 0 && <div className="text-slate-600 text-xs italic text-center mt-10">Journal is empty...</div>}
-                 </div>
-            </div>
-
         </div>
       </main>
     </div>
