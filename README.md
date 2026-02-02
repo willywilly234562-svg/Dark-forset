@@ -18,3 +18,11 @@ View your app in AI Studio: https://ai.studio/apps/drive/1DCK1Ht1h0MkfzMBwYUCkpv
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Manual GitHub Pages Deployment (main /docs)
+
+1. Install dependencies:
+   `npm install`
+2. Build the static site into `/docs`:
+   `npm run build`
+3. In GitHub: Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `main` / Folder: `/docs`.
